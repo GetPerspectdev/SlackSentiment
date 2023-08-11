@@ -1,12 +1,19 @@
+### personal note --  run with /usr/local/bin/python3.10 -m streamlit run streamlit_slack_toxicity_poc.py
+
+
+
+
+import streamlit as st
 import json
 import slack_sdk
 import pandas as pd
 import gc
 #from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error
 import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+import markdown
 import requests
-import sys
-import tqdm
 #from st_aggrid import GridOptionsBuilder, AgGrid, GridUpdateMode, DataReturnMode
 
 
@@ -169,38 +176,48 @@ class Span(object):
 class PerspectiveAPIException(Exception):
     pass
 
-##### main function definition
 
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python slack_toxicity_app.py YOUR_SLACK_API_KEY")
-        return
-    
-    token_slack = sys.argv[1]
 
-    ### get slack data
-    # Create a client instance
+### Streamlit app
+
+
+st.markdown("How To Get Token:")
+st.markdown("1\.  Create New App - <https://api.slack.com/apps>")
+st.markdown('2\.  Go to "OAuth & Permissions"')
+st.markdown('3\.  Under "Scopes", go to "User Token Scopes" and click "Add an OAuth Scope"')
+st.markdown("    *  Must have the following permissions:  channels : history, channels : read, groups : history, groups : read, im : history, im : read, mpim : history, mpim : read")
+st.markdown('4\.  Copy your "Bot User OAuth Token" (should start with "xoxb-...") and paste in the input box below. \n\n\n')
+
+token_slack = st.text_input("Enter Slack App User OAuth Key", '')
+
+## hold on running until slack_token is input
+
+if len(token_slack) != 0:
+
+### get slack data
+# Create a client instance
     client = slack_sdk.WebClient(token=token_slack)
 
     # Get list of all direct message channels
-    dm_channels_response = client.conversations_list(types=["im","mpim"])
+    dm_channels_response = client.conversations_list(types="im")
 
     # Prepare a dictionary to store all messages
     all_messages = {}
-    print('slack messages downloading...')
+
     # Iterate over each direct message channel
-    for channel in tqdm.tqdm(dm_channels_response["channels"]):
+    for channel in dm_channels_response["channels"]:
         # Get conversation history
         history_response = client.conversations_history(channel=channel["id"])
 
         # Store messages
         all_messages[channel["id"]] = history_response["messages"]
 
+    toxicity_scores = {}
     txts = []
     # progress_text = "Slack Messages Downloading. Please wait."
     # my_bar = st.progress(0, text=progress_text)
-    print('slack messages processing...')
-    for channel_id, messages in tqdm.tqdm(all_messages.items()):
+
+    for channel_id, messages in all_messages.items():
         for message in messages:
             try:
                 text = message["text"]
@@ -214,10 +231,8 @@ def main():
 
     df = pd.DataFrame(txts)
     df.columns =  ['timestamp','user','text']
-
-    #### FILTER OUT TO ONLY INCLUDE USERS MESSAGES
-    self_user = df['user'].value_counts().idxmax()
-    df = df[df.user == self_user]
+    #self_user = df['user'].value_counts().idxmax()
+    #df = df[df.user == self_user]
 
 
 
@@ -225,6 +240,8 @@ def main():
     comments = df['text']
 
     num_to_test = len(comments)
+
+    st.markdown("Getting scores for {num} messages.".format(num = num_to_test))
 
     #### run api
     google_api_key = 'AIzaSyCDlnuintUJAi1HKa4nAScA52T1gbn9v8g'
@@ -237,13 +254,21 @@ def main():
     insult_scores = []
     obscenity_scores = []
 
-    print('finished pulling messages from slack. getting toxicity scores now.')
+    #num_to_test = st.text_input("How many to run this on?", len(comments))
+    #progress_text = "Slack Messages Processing. Please wait."
+    #my_bar = st.progress(0, text=progress_text)
 
-    for comment in tqdm.tqdm(enumerate(comments[:num_to_test])):
 
+    #start = time.time()
+    for i, comment in enumerate(comments[:num_to_test]):
+        #if detect(comment) == 'en':
+        #my_bar.progress(1/num_to_test, text=progress_text)
+        #current = time.time()
+        #time.sleep(.05) # limit API calls to 1 per second
         try:
             toxicity = client.score(comment, tests=["TOXICITY", "INSULT", "OBSCENE"])
             
+            #target = targets[i]
             toxicity_scores.append(toxicity["TOXICITY"].score)
             insult_scores.append(toxicity["INSULT"].score)
             obscenity_scores.append(toxicity["OBSCENE"].score)
@@ -259,11 +284,24 @@ def main():
     df_eda['obscenity_scores'] = obscenity_scores
     df_eda['timestamp'] = pd.to_datetime(df_eda['timestamp'],unit='s')
 
-    df_json = df_eda.to_json
+    # df_eda.toxicity_scores *=100
+    # df_eda.severe_toxicity_scores *=100
+    # df_eda.obscenity_scores *=100
 
-    return df_json
-    
+    st.dataframe(df_eda)
 
+    df2 = df_eda.drop('user', axis=1).melt(['timestamp','text'],var_name='score',value_name='values')
 
-if __name__ == "__main__":
-    main()
+    fig, ax = plt.subplots()
+
+    ax = sns.scatterplot(x='timestamp',y='values', hue='score',data=df2)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right")
+
+    st.pyplot(fig)
+    #plt.hist(obscenity_scores)
+    #AgGrid(df_eda)
+
+    # fig = plt.figure(figsize=(10,4))
+    # ax = sns.barplot(data=plt_data, x="dtime",y="tdiff")
+    # ax.set(xlabel='Date', ylabel='Minutes',title='Minutes Spent Coding')
+    # st.pyplot(fig)
